@@ -52,6 +52,7 @@ class Event(models.Model):
     name = models.CharField(max_length=50)
     address = models.TextField()
     address_additional_info = models.TextField(blank=True, null=True)
+    city = models.TextField()
     min_play_time = models.IntegerField(blank=True, null=True)
     max_play_time = models.IntegerField(blank=True, null=True)
     min_players = models.IntegerField(blank=True, null=True)
@@ -61,17 +62,20 @@ class Event(models.Model):
     description = models.TextField(max_length=400, null=True, blank=True)
     is_active = models.BooleanField(default=True)
     game = models.IntegerField()
+    game_name = models.TextField()
+    game_thumbnail = models.TextField()
     # game = models.ForeignKey('Game', on_delete=models.CASCADE, related_name='related_events')
     organizer = models.ForeignKey(Profile, on_delete=models.CASCADE, related_name='organized_events')
-    participators = models.ManyToManyField(Profile, through='ParticipationRequest')
+    potential_participators = models.ManyToManyField(Profile, through='ParticipationRequest')
 
 
 class ParticipationRequest(models.Model):
     user = models.ForeignKey(Profile, on_delete=models.CASCADE, related_name='user_requests')
     event = models.ForeignKey(Event, on_delete=models.CASCADE, related_name='participation_requests')
     message = models.TextField(max_length=200, null=True, blank=True)
-    isAccepted = models.BooleanField(default=False)
+    is_accepted = models.BooleanField(default=False)
     answer = models.TextField(max_length=200, null=True, blank=True)
+    is_handled = models.BooleanField(default=False)
 
 
 # class Game(models.Model):

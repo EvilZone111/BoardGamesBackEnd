@@ -4,7 +4,7 @@ from rest_framework import response, status, permissions
 from rest_framework.decorators import action, permission_classes
 from rest_framework.exceptions import ValidationError
 from rest_framework.filters import SearchFilter
-from rest_framework.generics import GenericAPIView, CreateAPIView
+from rest_framework.generics import GenericAPIView, CreateAPIView, get_object_or_404
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework.viewsets import ModelViewSet, ReadOnlyModelViewSet
@@ -34,7 +34,7 @@ class ProfileViewSet(ModelViewSet):
         list1 = FriendshipStatusViewSet.queryset.filter(user1=user_id, isAccepted=True).values_list('user2',
                                                                                                     flat=True).distinct()
         list2 = FriendshipStatusViewSet.queryset.filter(user2=user_id, isAccepted=True).values_list('user1',
-                                                                                    flat=True).distinct()
+                                                                                                    flat=True).distinct()
         qs1 = self.queryset.filter(pk__in=list1)
         qs2 = self.queryset.filter(pk__in=list2)
         return serialize_data(self, qs1.union(qs2))
@@ -52,18 +52,24 @@ class EventViewSet(ModelViewSet):
     queryset = Event.objects.all()
     serializer_class = EventsSerializer
     filter_backends = [DjangoFilterBackend, SearchFilter]
-    filter_fields = ['game', 'organizer', 'is_active']
+    filter_fields = {
+        'game': ['exact'],
+        'organizer': ['exact'],
+        'is_active': ['exact'],
+        'city': ['exact'],
+        'date': ['gte', 'lte', ]
+    }
     search_fields = ['game']
 
     # создание
 
     def perform_create(self, serializer):
-        print(self.request.user.id)
-        return serializer.save(organizer=self.request.user, is_active=True)
+        serializer.save(organizer=self.request.user, is_active=True)
+        return Response(serializer.data)
 
     # поиск по нескольким критериям: http://127.0.0.1: 8000 / api / events /?game_id = 2 & playersMax = 4
 
-    # получения событий, организованных пользователем
+    # получение событий, организованных пользователем
 
     @action(detail=False, methods=['get'])
     def my_events(self, request):
@@ -76,6 +82,26 @@ class EventViewSet(ModelViewSet):
         queryset = self.queryset.filter(organizer=org_id)
         serializer = self.serializer_class(queryset, many=True, read_only=True)
         return Response(serializer.data)
+
+    # изменение мероприятия
+    @action(detail=False, methods=['put'], url_path='(?P<event_id>[^/.]+)/edit')
+    def edit(self, request, event_id):
+        print(self.request.data)
+        instance = get_object_or_404(Event.objects.all(), pk=event_id)
+        if self.request.data['organizer'] == self.request.user.id:
+            serializer = self.serializer_class(instance, data=self.request.data)
+            if serializer.is_valid():
+                serializer.save(organizer=self.request.user)
+                return Response(serializer.data)
+            return Response(status=status.HTTP_400_BAD_REQUEST)
+        return Response(status=status.HTTP_403_FORBIDDEN)
+        # if self.request.user=
+        # friendship = self.queryset.filter(user2=self.request.user, user1=Profile.objects.get(id=user1_id)).first()
+        # friendship.isAccepted = True
+        # friendship.message = None
+        # friendship.save()
+        # serializer = self.serializer_class(friendship)
+        # return Response(serializer.   data)
 
 
 class ScoresViewSet(ModelViewSet):
@@ -131,6 +157,8 @@ class ScoresViewSet(ModelViewSet):
             serializer = self.serializer_class(score_obj)
             return Response(serializer.data)
 
+    # удаление оценки
+
     @action(detail=False, methods=['delete'], url_path='delete/(?P<game_id>[^/.]+)')
     def delete(self, request, game_id):
         user_rate = self.queryset.filter(user=self.request.user, game=game_id).first()
@@ -143,14 +171,32 @@ class ParticipationRequestsViewSet(ModelViewSet):
     queryset = ParticipationRequest.objects.all()
     serializer_class = ParticipationRequestsSerializer
 
-    # получение заявок на мероприятие
+    # получение нерассмотренных заявок на мероприятие
 
-    @action(detail=False, methods=['get'], url_path='event/(?P<event_id>[^/.]+)')
-    def requests_by_event(self, request, event_id):
+    @action(detail=False, methods=['get'], url_path='event/(?P<event_id>[^/.]+)/unhandled_requests')
+    def unhandled_requests_by_event(self, request, event_id):
         if Event.objects.get(id=event_id).organizer == self.request.user:
-            return serialize_data(self, self.queryset.filter(event=event_id, isAccepted=False))
+            return serialize_data(self, self.queryset.filter(event=event_id, is_handled=False))
 
     # получение списка участников
+
+    @action(detail=False, methods=['get'], url_path='event/(?P<event_id>[^/.]+)/participators')
+    def participators_of_event(self, request, event_id):
+        return serialize_data(self, self.queryset.filter(event=event_id, is_accepted=True))
+
+    # получение всех заявок на участие
+
+    @action(detail=False, methods=['get'], url_path='event/(?P<event_id>[^/.]+)/requests')
+    def requests_by_event(self, request, event_id):
+        if Event.objects.get(id=event_id).organizer == self.request.user:
+            return serialize_data(self, self.queryset.filter(event=event_id))
+
+    # получение статуса моей заявки
+    @action(detail=False, methods=['get'], url_path='event/(?P<event_id>[^/.]+)/my_request')
+    def my_request_status(self, request, event_id):
+        if Event.objects.get(id=event_id).organizer != self.request.user:
+            return serialize_data(self, self.queryset.filter(event=event_id))
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
     # получение исходящих заявок
 
@@ -168,7 +214,7 @@ class ParticipationRequestsViewSet(ModelViewSet):
                                 status=status.HTTP_400_BAD_REQUEST)
             serializer = self.serializer_class(data=request.data)
             if serializer.is_valid():
-                serializer.save(user=self.request.user, event=Event.objects.get(id=event_id))
+                serializer.save(user=self.request.user, event=Event.objects.get(id=event_id), is_accepted=False)
                 return Response(serializer.data, status=status.HTTP_201_CREATED)
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
         else:
@@ -176,14 +222,34 @@ class ParticipationRequestsViewSet(ModelViewSet):
 
     # изменение заявки(ответ на заявку)
 
-    def update(self, request, *args, **kwargs):
-        user_rate = self.queryset.filter(user=self.request.user, game=request.data['game_id']).first()
-        user_rate.message = request.data["message"]
-        user_rate.answer = request.data["answer"]
-        user_rate.isAccepted = request.data["isAccepted"]
-        user_rate.save()
-        serializer = self.serializer_class(user_rate)
+    @action(detail=False, methods=['patch'], url_path='respond/(?P<event_id>[^/.]+)/(?P<user_id>[^/.]+)')
+    def respond(self, request, event_id, user_id):
+        user_request = self.queryset.filter(user=user_id, event=event_id).first()
+        user_request.answer = request.data['answer']
+        user_request.is_accepted = request.data['is_accepted']
+        user_request.is_handled = True
+        user_request.save()
+        serializer = self.serializer_class(user_request)
         return Response(serializer.data)
+        # if(user_request.or):
+        #
+        #     # user_rate.message = request.data["message"]
+        #     user_rate.answer = request.data["answer"]
+        #     user_rate.is_accepted = request.data["is_accepted"]
+        #     user_rate.save()
+        #     serializer = self.serializer_class(user_rate)
+        #     return Response(serializer.data)
+
+    # удаление заявки
+
+    @action(detail=False, methods=['delete'], url_path='delete/(?P<event_id>[^/.]+)')
+    def delete(self, request, event_id):
+        user_request = self.queryset.filter(user=self.request.user, event=event_id).first()
+        if user_request is not None:
+            user_request.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+    # получение статуса заявки
 
 
 class FriendshipStatusViewSet(ModelViewSet):
@@ -216,15 +282,15 @@ class FriendshipStatusViewSet(ModelViewSet):
         else:
             return Response({'message': "Заявка уже отправлена"}, status=status.HTTP_400_BAD_REQUEST)
 
-    # принятие заявки(для отклонения-удалить запись )
-    @action(detail=False, methods=['put'], url_path='accept/(?P<user1_id>[^/.]+)')
-    def accept_request(self, request, user1_id):
-        friendship = self.queryset.filter(user2=self.request.user, user1=Profile.objects.get(id=user1_id)).first()
-        friendship.isAccepted = True
-        friendship.message = None
-        friendship.save()
-        serializer = self.serializer_class(friendship)
-        return Response(serializer.data)
+    # # принятие заявки(для отклонения-удалить запись )
+    # @action(detail=False, methods=['put'], url_path='accept/(?P<user1_id>[^/.]+)')
+    # def accept_request(self, request, user1_id):
+    #     friendship = self.queryset.filter(user2=self.request.user, user1=Profile.objects.get(id=user1_id)).first()
+    #     friendship.isAccepted = True
+    #     friendship.message = None
+    #     friendship.save()
+    #     serializer = self.serializer_class(friendship)
+    #     return Response(serializer.data)
 
 
 class RegisterAPIView(GenericAPIView):
